@@ -1,0 +1,2 @@
+app/(main)/upload.tsx(120,30): error TS7031: Binding element 'progress' implicitly has an 'any' type.
+constants/uploadthing.ts(1,10): error TS2724: '"@uploadthing/expo"' has no exported member named 'generateReactHelpers'. Did you mean 'generateReactNativeHelpers'?

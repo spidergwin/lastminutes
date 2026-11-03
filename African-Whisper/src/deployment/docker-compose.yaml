@@ -1,0 +1,19 @@
+version: '3'
+services:
+  speech-inference:
+    container_name: speech-inference
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    #IF THE IMAGE IS READY COMMENT OUT THE BUILD SPECIFICATIONS
+    # image: DOCKER-USERNAME/DOCKER-IMAGE:TAG
+    ports:
+      - 8000:8000
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - 9090:9090

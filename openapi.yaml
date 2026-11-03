@@ -1,0 +1,588 @@
+openapi: 3.1.0
+info:
+  title: Last Minutes Gateway API
+  description: |
+    Production-grade API gateway contract for the Last Minutes Meeting Intelligence Platform.
+    
+    All standard business routes are versioned and require bearer token authentication.
+    Exceptions include the `/health` service check and `/webhooks/recall` third-party signature check.
+    
+    Errors strictly follow the **RFC 7807 Problem Details** specification.
+    List endpoints employ **opaque cursor-based pagination**.
+  version: 1.0.0
+
+servers:
+  - url: /
+    description: Current Service Origin
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ==========================================
+  # Infrastructure & Webhooks
+  # ==========================================
+  /health:
+    get:
+      summary: Health Check
+      description: Returns service health status for deployment checks (Railway, internal probes).
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: Service is healthy and connecting to dependent services
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - version
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+                  version:
+                    type: string
+                    example: "1.0.0"
+        '503':
+          description: Service is unhealthy (e.g. database or Redis pool down)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /webhooks/recall:
+    post:
+      summary: Recall.ai Bot Webhook Callback
+      description: |
+        Receives bot lifecycle events and recording done hooks from Recall.ai.
+        No user auth is required. Request headers must present a valid `X-Recall-Signature` for signature checking.
+      operationId: recallWebhook
+      security: []
+      parameters:
+        - name: X-Recall-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+          description: HMAC-SHA256 signature calculated from the raw payload using RECALL_WEBHOOK_SECRET
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - event
+                - data
+              properties:
+                event:
+                  type: string
+                  description: Hook event code (e.g., bot.status_change, bot.done, bot.fatal)
+                  example: "bot.status_change"
+                data:
+                  type: object
+                  required:
+                    - id
+                  properties:
+                    id:
+                      type: string
+                      description: Recall bot UUID
+                      example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                    status:
+                      type: object
+                      properties:
+                        code:
+                          type: string
+                          example: "recording"
+                        message:
+                          type: string
+                          nullable: true
+                          example: null
+      responses:
+        '200':
+          description: Webhook received and processing successfully queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - success
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+
+  # ==========================================
+  # Meetings Domain
+  # ==========================================
+  /v1/meetings:
+    get:
+      summary: List Upcoming/Active Meetings
+      description: Returns a list of meetings associated with the current user, utilizing cursor-based pagination.
+      operationId: listMeetings
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+          description: Number of items per page
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Opaque pagination cursor
+      responses:
+        '200':
+          description: List retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeetingListResponse'
+
+    post:
+      summary: Join / Schedule Meeting Bot
+      description: Send a bot to join a meeting URL now or in the future.
+      operationId: createMeeting
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MeetingCreateRequest'
+      responses:
+        '201':
+          description: Bot scheduled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Meeting'
+
+  /v1/meetings/{id}:
+    get:
+      summary: Get Meeting Details
+      description: Fetches full details for a scheduled or recorded meeting by its UUID.
+      operationId: getMeeting
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Meeting details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Meeting'
+
+    delete:
+      summary: Cancel Meeting Bot
+      description: Deletes a scheduled Recall.ai bot or forces an active recording bot to leave immediately.
+      operationId: deleteMeeting
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Bot left / cancelled successfully
+
+  # ==========================================
+  # Assets & Transcripts Domain (The Media Library)
+  # ==========================================
+  /v1/transcripts:
+    get:
+      summary: List Media Library (Uploads + Meetings)
+      description: Returns the user's unified library of transcripts and media assets.
+      operationId: listTranscripts
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Library retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscriptListResponse'
+
+    post:
+      summary: Create Manual Transcript
+      description: Creates a transcript entry manually (e.g. for external text ingestion).
+      operationId: createTranscript
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TranscriptCreateRequest'
+      responses:
+        '201':
+          description: Transcript created
+
+  /v1/transcripts/{id}:
+    get:
+      summary: Get Transcript Details
+      description: Fetches the finished transcript with segment-by-segment speaker mappings and metadata.
+      operationId: getTranscript
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Transcript details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transcript'
+
+    put:
+      summary: Update Transcript Metadata
+      description: Update the title, tags, or visibility of a transcript.
+      operationId: updateTranscript
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TranscriptUpdateRequest'
+      responses:
+        '200':
+          description: Transcript updated
+
+    delete:
+      summary: Delete Transcript and Media
+      description: Removes the transcript record and associated media files from storage.
+      operationId: deleteTranscript
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Deleted successfully
+
+  /v1/transcripts/{id}/media:
+    get:
+      summary: Get Secure Media Stream URL
+      description: Generates a short-lived presigned URL for secure playback of the audio/video asset.
+      operationId: getTranscriptMediaUrl
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Presigned URL generated
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - url
+                  - expiresAt
+                properties:
+                  url:
+                    type: string
+                    format: uri
+                    description: Signed URL to R2/S3 storage.
+                  expiresAt:
+                    type: string
+                    format: date-time
+
+  /v1/transcripts/{id}/summary:
+    get:
+      summary: Get Transcript Summary
+      description: Fetches executive summaries, decisions, and action items.
+      operationId: getTranscriptSummary
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Intelligence summary retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Summary'
+
+  # ==========================================
+  # Real-time & WebSockets
+  # ==========================================
+  /v1/ws/stream/{id}:
+    get:
+      summary: WebSocket Microlatency Stream
+      description: |
+        Upgrades to WebSocket for real-time speaker-labeled fragments.
+        Handles both live recordings and real-time upload progress.
+      operationId: connectStream
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '101':
+          description: Handshake successful
+
+  # ==========================================
+  # Upload Pipeline
+  # ==========================================
+  /v1/uploads/initiate:
+    post:
+      summary: Initiate Secure Upload Handshake
+      description: |
+        Validates user quota and returns a presigned URL or strategy for direct-to-cloud upload.
+        Next.js never sees the file bytes.
+      operationId: initiateUpload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - filename
+                - fileSize
+                - contentType
+              properties:
+                filename:
+                  type: string
+                fileSize:
+                  type: integer
+                contentType:
+                  type: string
+      responses:
+        '200':
+          description: Handshake successful
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - strategy
+                  - uploadUrl
+                properties:
+                  strategy:
+                    type: string
+                    enum: [r2, drive, uploadthing]
+                  uploadUrl:
+                    type: string
+                    format: uri
+                  fields:
+                    type: object
+                    description: Optional additional fields for multipart/form-data POST strategies.
+
+  # ==========================================
+  # Intelligence Operations
+  # ==========================================
+  /v1/summarize:
+    post:
+      summary: Trigger Intelligence Job
+      description: Queues an intelligence job (summary, decisions) for an existing transcript.
+      operationId: runSummarize
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - transcriptId
+              properties:
+                transcriptId:
+                  type: string
+                type:
+                  type: string
+                  default: "EXECUTIVE_SUMMARY"
+      responses:
+        '202':
+          description: Job queued (check WS for updates)
+
+  /v1/translate:
+    post:
+      summary: Translate Text Fragments
+      description: Real-time translation of specific transcript segments using DeepSeek/Gemini.
+      operationId: translateText
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - text
+                - targetLang
+              properties:
+                text:
+                  type: string
+                sourceLang:
+                  type: string
+                targetLang:
+                  type: string
+      responses:
+        '200':
+          description: Translated result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  translatedText:
+                    type: string
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Pass the Better Auth session token in the `Authorization: Bearer <token>` format.
+
+  schemas:
+    ProblemDetails:
+      type: object
+      required: [type, title, status, detail]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string, format: uri }
+
+    Meeting:
+      type: object
+      required: [id, title, startTime, botStatus]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        startTime: { type: string, format: date-time }
+        endTime: { type: string, format: date-time }
+        botStatus: { type: string, enum: [idle, scheduled, joining, recording, processing, completed, failed] }
+        meetingUrl: { type: string, format: uri, nullable: true }
+        transcriptId: { type: string, nullable: true }
+
+    MeetingCreateRequest:
+      type: object
+      required: [title, startTime, meetingUrl]
+      properties:
+        title: { type: string }
+        startTime: { type: string, format: date-time }
+        endTime: { type: string, format: date-time }
+        meetingUrl: { type: string, format: uri }
+        autoJoinEnabled: { type: boolean, default: true }
+
+    MeetingListResponse:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Meeting' } }
+        next_cursor: { type: string, nullable: true }
+        has_more: { type: boolean }
+
+    Transcript:
+      type: object
+      required: [id, title, originalText, sourceLanguage, segments]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        originalText: { type: string }
+        sourceLanguage: { type: string, example: "yo" }
+        duration: { type: integer, description: "seconds" }
+        wordCount: { type: integer }
+        fileUrl: { type: string, nullable: true }
+        fileType: { type: string, enum: [audio, video, meeting], nullable: true }
+        segments: { type: array, items: { $ref: '#/components/schemas/TranscriptSegment' } }
+        speakers: { type: array, items: { type: string } }
+        createdAt: { type: string, format: date-time }
+
+    TranscriptSegment:
+      type: object
+      required: [start, end, speaker, text]
+      properties:
+        start: { type: number, format: float }
+        end: { type: number, format: float }
+        speaker: { type: string }
+        text: { type: string }
+        language: { type: string, description: "PCM, YO, IG, HA, EN" }
+
+    TranscriptListResponse:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Transcript' } }
+        next_cursor: { type: string, nullable: true }
+        has_more: { type: boolean }
+
+    TranscriptCreateRequest:
+      type: object
+      required: [title, originalText]
+      properties:
+        title: { type: string }
+        originalText: { type: string }
+        fileUrl: { type: string }
+        fileType: { type: string }
+
+    TranscriptUpdateRequest:
+      type: object
+      properties:
+        title: { type: string }
+        isPublic: { type: boolean }
+
+    Summary:
+      type: object
+      required: [id, transcriptId, executiveSummary]
+      properties:
+        id: { type: string }
+        transcriptId: { type: string }
+        executiveSummary: { type: string }
+        actionItems:
+          type: array
+          items:
+            type: object
+            properties:
+              task: { type: string }
+              assignee: { type: string, nullable: true }
+              priority: { type: string, enum: [low, medium, high] }
+        decisions:
+          type: array
+          items:
+            type: object
+            properties:
+              detail: { type: string }
+              maker: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }

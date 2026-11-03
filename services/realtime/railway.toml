@@ -1,0 +1,9 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "/realtime"
+# Rust service doesn't have an HTTP healthcheck by default, relying on process exit
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5

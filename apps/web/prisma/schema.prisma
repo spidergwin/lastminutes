@@ -1,0 +1,370 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============= Authentication Models =============
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String?
+  image         String?
+  emailVerified Boolean  @default(false)
+  role          UserRole @default(USER)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  uploadThingToken String?
+  tourCompleted    Boolean @default(false)
+
+  // Relations
+  accounts            Account[]
+  sessions            Session[]
+  transcripts         Transcript[]
+  usage               Usage?
+  subscription        Subscription?
+  auditLogs           AuditLog[]
+  translationStats    TranslationStat[]
+  calendarConnections CalendarConnection[]
+  driveConnections    GoogleDriveConnection[]
+  meetingSchedules    MeetingSchedule[]
+  threads             Thread[]
+
+  @@index([email])
+  @@index([role])
+  @@map("User")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  password              String?
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("Account")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("Session")
+}
+
+model Verification {
+  id         String    @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+
+  @@index([identifier])
+  @@map("Verification")
+}
+
+// ============= Main Business Models =============
+
+model Transcript {
+  id             String   @id @default(cuid())
+  userId         String
+  title          String
+  originalText   String   @db.Text
+  translatedText String?  @db.Text
+  sourceLanguage String   @default("en")
+  targetLanguage String?
+  duration       Int // in seconds
+  wordCount      Int      @default(0)
+  fileUrl        String?
+  fileType       String? // "audio", "video", "dictation", "url", "meeting"
+  transcribedAt  DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  isPublic       Boolean  @default(false)
+  segments       Json? // Word-level timestamps + speaker labels
+  speakers       String[] // Identified speakers
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  summaries Summary[]
+  meetings  MeetingSchedule[]
+  threads   Thread[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([sourceLanguage])
+}
+
+model Summary {
+  id           String      @id @default(cuid())
+  transcriptId String
+  type         SummaryType
+  content      String      @db.Text
+  metadata     Json?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  transcript Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+
+  @@index([transcriptId])
+  @@index([type])
+}
+
+enum SummaryType {
+  EXECUTIVE_SUMMARY
+  ACTION_ITEMS
+  KEY_DECISIONS
+  MEETING_NOTES
+  CUSTOM
+}
+
+model Usage {
+  id                   String   @id @default(cuid())
+  userId               String   @unique
+  monthlyDictationMins Int      @default(0)
+  monthlyUploadMins    Int      @default(0)
+  monthlyTranslations  Int      @default(0)
+  totalDictationMins   Int      @default(0)
+  totalUploadMins      Int      @default(0)
+  totalTranslations    Int      @default(0)
+  lastResetDate        DateTime @default(now())
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Subscription {
+  id                     String             @id @default(cuid())
+  userId                 String             @unique
+  plan                   SubscriptionPlan   @default(TRIAL)
+  status                 SubscriptionStatus @default(ACTIVE)
+  stripeId               String?            @unique
+  stripePriceId          String?
+  stripeCurrentPeriodEnd DateTime?
+  monthlyLimit           Int                @default(0)
+  trialEndsAt            DateTime?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([plan])
+}
+
+enum SubscriptionPlan {
+  TRIAL
+  PRO
+  BUSINESS
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  SUSPENDED
+  PAST_DUE
+}
+
+// ============= Monitoring & Analytics =============
+
+model TranslationStat {
+  id              String   @id @default(cuid())
+  userId          String
+  sourceLang      String
+  targetLang      String
+  wordCount       Int
+  translationTime Int // in ms
+  success         Boolean  @default(true)
+  provider        String // "libretranslate" | "argos"
+  createdAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([sourceLang, targetLang])
+}
+
+model SystemLog {
+  id        String   @id @default(cuid())
+  level     LogLevel
+  message   String   @db.Text
+  metadata  String?  @db.Text // JSON string
+  service   String
+  createdAt DateTime @default(now())
+
+  @@index([level])
+  @@index([createdAt])
+  @@index([service])
+}
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+  CRITICAL
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String
+  resource  String
+  changes   String?  @db.Text // JSON string
+  ipAddress String?
+  userAgent String?
+  success   Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ============= Meeting & Calendar Integration =============
+
+model CalendarConnection {
+  id            String    @id @default(cuid())
+  userId        String
+  provider      String // "google" | "microsoft"
+  accessToken   String    @db.Text
+  refreshToken  String?   @db.Text
+  tokenExpiry   DateTime?
+  calendarEmail String
+  enabled       Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  meetings MeetingSchedule[]
+
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+model GoogleDriveConnection {
+  id           String    @id @default(cuid())
+  userId       String
+  accessToken  String    @db.Text
+  refreshToken String?   @db.Text
+  tokenExpiry  DateTime?
+  email        String
+  enabled      Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId])
+  @@index([userId])
+}
+
+model MeetingSchedule {
+  id                   String   @id @default(cuid())
+  userId               String
+  calendarConnectionId String
+  externalEventId      String // Calendar event ID
+  title                String
+  description          String?  @db.Text
+  startTime            DateTime
+  endTime              DateTime
+  meetingUrl           String? // Zoom/Meet/Teams link
+  platform             String? // "zoom" | "google_meet" | "teams" | "webex"
+  organizer            String? // Email of meeting organizer
+  attendees            String[] // Emails of attendees
+  autoJoinEnabled      Boolean  @default(false)
+  botStatus            String   @default("idle") // "idle" | "scheduled" | "joining" | "recording" | "processing" | "completed" | "failed"
+  botId                String? // Recall.ai bot ID
+  botError             String? // Error message if bot failed
+  transcriptId         String? // Link to our Transcript model after processing
+  recordingUrl         String? // URL to meeting recording
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  calendarConnection CalendarConnection @relation(fields: [calendarConnectionId], references: [id], onDelete: Cascade)
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transcript         Transcript?        @relation(fields: [transcriptId], references: [id])
+
+  @@unique([calendarConnectionId, externalEventId])
+  @@index([userId])
+  @@index([startTime])
+  @@index([botStatus])
+}
+
+// ============= Chat & Threads =============
+
+model Thread {
+  id           String   @id @default(cuid())
+  userId       String
+  transcriptId String?
+  title        String   @default("New Chat")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transcript Transcript? @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+  messages   Message[]
+
+  @@index([userId])
+  @@index([transcriptId])
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  threadId  String
+  role      String // "user", "assistant", "system", "data"
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+}
+
+model jwks {
+  id         String    @id
+  publicKey  String
+  privateKey String
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime?
+
+  @@map("jwks")
+}
